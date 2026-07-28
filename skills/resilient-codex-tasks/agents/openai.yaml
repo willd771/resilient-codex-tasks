@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Task Retry"
+  short_description: "Retry transient Codex errors and resume tasks"
+  default_prompt: "Use $resilient-codex-tasks to run this Codex task resiliently."
