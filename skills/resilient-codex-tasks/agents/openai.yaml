@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Task Retry"
-  short_description: "Retry transient Codex errors and resume tasks"
+  short_description: "Retry Codex CLI tasks globally and resume work"
   default_prompt: "Use $resilient-codex-tasks to run this Codex task resiliently."

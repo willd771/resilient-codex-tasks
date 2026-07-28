@@ -67,6 +67,21 @@ class CodexRetryTests(unittest.TestCase):
 
         self.assertEqual(thread_id, "thread-123")
 
+    def test_renders_agent_messages_from_json_output_when_requested(self):
+        module = load_module()
+        output = StringIO()
+        result = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"type":"item.completed","item":{"type":"agent_message","text":"task complete"}}\n',
+            stderr="",
+        )
+
+        with redirect_stdout(output):
+            module.print_output(result, render_json_output=True)
+
+        self.assertEqual(output.getvalue(), "task complete\n")
+
     def test_retries_transient_failure_by_resuming_the_same_thread(self):
         module = load_module()
         first = subprocess.CompletedProcess(
@@ -135,6 +150,76 @@ class CodexRetryTests(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
             state = json.loads(state_file.read_text(encoding="utf-8"))
             self.assertEqual(state["status"], "completed")
+
+    def test_retries_a_saved_raw_command_and_resumes_its_thread(self):
+        module = load_module()
+        first = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout='{"type":"thread.started","thread_id":"thread-command"}\n',
+            stderr="HTTP 503 service unavailable",
+        )
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="completed\n", stderr="")
+        initial_command = ["C:\\tools\\codex.cmd", "exec", "--json", "finish the task"]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_file = Path(temp_dir) / "retry-state.json"
+            with patch.object(module.subprocess, "run", side_effect=[first, completed]) as run, patch.object(
+                module.time, "sleep"
+            ):
+                exit_code = module.main(
+                    [
+                        "--command-json",
+                        json.dumps(initial_command),
+                        "--cwd",
+                        temp_dir,
+                        "--state-file",
+                        str(state_file),
+                        "--delays",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(run.call_args_list[0].args[0], initial_command)
+            self.assertEqual(run.call_args_list[1].args[0][:4], [
+                "C:\\tools\\codex.cmd",
+                "exec",
+                "resume",
+                "thread-command",
+            ])
+
+    def test_uses_short_client_retry_budget_when_requested(self):
+        module = load_module()
+        forbidden = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="HTTP 403 forbidden"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_file = Path(temp_dir) / "retry-state.json"
+            with patch.object(module.subprocess, "run", return_value=forbidden) as run, patch.object(
+                module.time, "sleep"
+            ) as sleep:
+                exit_code = module.main(
+                    [
+                        "--prompt",
+                        "finish the task",
+                        "--cwd",
+                        temp_dir,
+                        "--state-file",
+                        str(state_file),
+                        "--delays",
+                        "0,0",
+                        "--client-delays",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(run.call_count, 2)
+            sleep.assert_called_once_with(0)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(state["retry_counts"]["client"], 1)
 
     def test_resumes_a_persisted_thread_after_the_wrapper_restarts(self):
         module = load_module()

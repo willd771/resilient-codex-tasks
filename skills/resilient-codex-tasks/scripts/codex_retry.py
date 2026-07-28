@@ -119,6 +119,28 @@ def parse_delays(raw_delays: str) -> List[float]:
     return delays
 
 
+def parse_command_json(raw_command: str) -> List[str]:
+    try:
+        command = json.loads(raw_command)
+    except json.JSONDecodeError as error:
+        raise ValueError("--command-json must contain a JSON array of command arguments") from error
+    if not isinstance(command, list) or not command or any(
+        not isinstance(value, str) or not value for value in command
+    ):
+        raise ValueError("--command-json must contain one or more non-empty string arguments")
+    return command
+
+
+def read_command(value: Any, field_name: str) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value or any(
+        not isinstance(item, str) or not item for item in value
+    ):
+        raise ValueError(f"State file has invalid {field_name}")
+    return value
+
+
 def split_command(command: str) -> List[str]:
     parts = shlex.split(command, posix=os.name != "nt")
     if not parts:
@@ -147,7 +169,11 @@ def write_state(state_file: Path, state: Dict[str, Any]) -> None:
 
 
 def build_command(
-    codex_command: Iterable[str], prompt: str, thread_id: Optional[str], language: str = "en"
+    codex_command: Iterable[str],
+    prompt: Optional[str],
+    thread_id: Optional[str],
+    language: str = "en",
+    initial_command: Optional[Iterable[str]] = None,
 ) -> List[str]:
     command = list(codex_command)
     if thread_id:
@@ -159,6 +185,10 @@ def build_command(
             "--skip-git-repo-check",
             MESSAGES[language]["resume_prompt"],
         ]
+    if initial_command is not None:
+        return list(initial_command)
+    if not prompt:
+        raise ValueError("A prompt is required when no initial command is stored")
     return command + ["exec", "--json", "--skip-git-repo-check", prompt]
 
 
@@ -169,9 +199,27 @@ def run_codex(command: List[str], cwd: Path) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(command, 127, "", str(error))
 
 
-def print_output(result: subprocess.CompletedProcess) -> None:
-    if result.stdout:
-        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+def render_jsonl_output(output: str) -> str:
+    rendered_lines = []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            rendered_lines.append(line)
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text:
+            rendered_lines.append(text)
+    return "\n".join(rendered_lines)
+
+
+def print_output(result: subprocess.CompletedProcess, render_json_output: bool = False) -> None:
+    stdout = render_jsonl_output(result.stdout) if render_json_output and result.stdout else result.stdout
+    if stdout:
+        print(stdout, end="" if stdout.endswith("\n") else "\n")
     if result.stderr:
         print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr)
 
@@ -181,14 +229,24 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--prompt", help="Initial Codex task prompt")
     mode.add_argument("--resume", type=Path, help="Resume from a persisted retry-state JSON file")
+    mode.add_argument("--command-json", help="Initial Codex command as a JSON argument array")
     parser.add_argument("--cwd", type=Path, default=Path.cwd(), help="Codex working directory")
     parser.add_argument("--state-file", type=Path, help="State file path for a new task")
     parser.add_argument("--delays", default=DEFAULT_DELAYS, help="Retry delays in seconds")
-    parser.add_argument("--codex-command", default="codex", help="Codex executable or command")
+    parser.add_argument(
+        "--client-delays",
+        help="Optional retry delays for HTTP 400, 401, and 403 responses",
+    )
+    parser.add_argument("--codex-command", help="Codex executable or command")
     parser.add_argument(
         "--language",
         choices=sorted(MESSAGES),
         help="Wrapper message language. Defaults to English and persists in the state file.",
+    )
+    parser.add_argument(
+        "--render-json-output",
+        action="store_true",
+        help="Render completed Codex agent messages instead of printing JSON event lines.",
     )
     return parser
 
@@ -199,8 +257,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     messages = MESSAGES[language]
     try:
         delays = parse_delays(args.delays)
+        client_delays = parse_delays(args.client_delays) if args.client_delays else None
         cwd = args.cwd.resolve()
-        codex_command = split_command(args.codex_command)
+        provided_codex_command = split_command(args.codex_command) if args.codex_command else None
         if args.resume:
             state_file = args.resume.resolve()
             state = read_state(state_file)
@@ -210,30 +269,50 @@ def main(argv: Optional[List[str]] = None) -> int:
                 raise ValueError(f"State file has unsupported language: {language}")
             messages = MESSAGES[language]
             prompt = state.get("prompt")
-            if not isinstance(prompt, str) or not prompt:
-                raise ValueError("State file does not contain the original prompt")
+            initial_command = read_command(state.get("initial_command"), "initial_command")
+            if initial_command is None and (not isinstance(prompt, str) or not prompt):
+                raise ValueError("State file does not contain the original prompt or command")
+            saved_codex_command = read_command(state.get("codex_command"), "codex_command")
+            codex_command = provided_codex_command or saved_codex_command
+            if codex_command is None:
+                codex_command = [initial_command[0]] if initial_command else ["codex"]
         else:
             state_file = (args.state_file or cwd / ".codex-retry-state.json").resolve()
+            initial_command = parse_command_json(args.command_json) if args.command_json else None
             prompt = args.prompt
+            codex_command = provided_codex_command
+            if codex_command is None:
+                codex_command = [initial_command[0]] if initial_command else ["codex"]
             state = {
                 "status": "running",
                 "prompt": prompt,
                 "thread_id": None,
                 "attempt": 0,
                 "language": language,
+                "codex_command": codex_command,
             }
+            if initial_command is not None:
+                state["initial_command"] = initial_command
     except ValueError as error:
         print(messages["configuration_error"].format(error=error), file=sys.stderr)
         return 64
 
-    retry_count = int(state.get("retry_count", 0))
     while True:
         state["attempt"] = int(state.get("attempt", 0)) + 1
         state["status"] = "running"
         write_state(state_file, state)
 
-        result = run_codex(build_command(codex_command, prompt, state.get("thread_id"), language), cwd)
-        print_output(result)
+        result = run_codex(
+            build_command(
+                codex_command,
+                prompt,
+                state.get("thread_id"),
+                language,
+                initial_command,
+            ),
+            cwd,
+        )
+        print_output(result, render_json_output=args.render_json_output)
         discovered_thread_id = extract_thread_id(result.stdout or "")
         if discovered_thread_id:
             state["thread_id"] = discovered_thread_id
@@ -256,20 +335,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             write_state(state_file, state)
             print(messages["non_retryable"].format(state_file=state_file), file=sys.stderr)
             return result.returncode or 1
-        if retry_count >= len(delays):
+        error_output = f"{result.stdout}\n{result.stderr}"
+        retry_key = "client" if client_delays and re.search(r"\b(?:400|401|403)\b", error_output) else "default"
+        retry_delays = client_delays if retry_key == "client" else delays
+        retry_counts = state.get("retry_counts")
+        if not isinstance(retry_counts, dict):
+            retry_counts = {}
+        retry_count = int(retry_counts.get(retry_key, state.get("retry_count", 0) if retry_key == "default" else 0))
+        if retry_count >= len(retry_delays):
             state["status"] = "retry_exhausted"
             write_state(state_file, state)
             print(messages["retry_exhausted"].format(state_file=state_file), file=sys.stderr)
             return result.returncode or 1
 
-        delay = delays[retry_count]
+        delay = retry_delays[retry_count]
         retry_count += 1
         state["status"] = "retrying"
-        state["retry_count"] = retry_count
+        retry_counts[retry_key] = retry_count
+        state["retry_counts"] = retry_counts
+        state["retry_count"] = sum(int(count) for count in retry_counts.values())
         write_state(state_file, state)
         print(
             messages["retrying"].format(
-                delay=delay, retry_count=retry_count, retry_limit=len(delays)
+                delay=delay, retry_count=retry_count, retry_limit=len(retry_delays)
             ),
             file=sys.stderr,
         )

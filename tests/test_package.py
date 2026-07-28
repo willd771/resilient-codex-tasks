@@ -14,6 +14,8 @@ class PublicationPackageTests(unittest.TestCase):
             SKILL_ROOT / "SKILL.md",
             SKILL_ROOT / "agents" / "openai.yaml",
             SKILL_ROOT / "scripts" / "codex_retry.py",
+            SKILL_ROOT / "scripts" / "global_proxy.py",
+            SKILL_ROOT / "scripts" / "install_global.py",
         )
 
         for required_file in required_files:
