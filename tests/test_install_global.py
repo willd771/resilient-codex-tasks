@@ -97,7 +97,9 @@ class InstallGlobalTests(unittest.TestCase):
             config_path = codex_home / "resilient-codex-tasks" / "global.json"
             config_path.parent.mkdir(parents=True)
             config_path.write_text(json.dumps({"real_codex": "C:\\npm\\codex.cmd"}), encoding="utf-8")
-            with patch.object(module, "find_real_codex") as find_real_codex, patch.object(
+            with patch.object(module.os, "name", "nt"), patch.object(
+                module, "find_real_codex"
+            ) as find_real_codex, patch.object(
                 module, "install_global", return_value={"real_codex": "C:\\npm\\codex.cmd"}
             ) as install:
                 exit_code = module.main(["install", "--codex-home", str(codex_home)])

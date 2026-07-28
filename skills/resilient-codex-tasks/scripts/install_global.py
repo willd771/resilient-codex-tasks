@@ -5,6 +5,7 @@ import argparse
 import ctypes
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -43,9 +44,16 @@ def path_entries(path_value: str):
 
 
 def same_path(left: str, right: str) -> bool:
-    normalized_left = os.path.normcase(os.path.normpath(os.path.expandvars(left)))
-    normalized_right = os.path.normcase(os.path.normpath(os.path.expandvars(right)))
+    normalized_left = os.path.normcase(os.path.normpath(expand_path_variables(left)))
+    normalized_right = os.path.normcase(os.path.normpath(expand_path_variables(right)))
     return normalized_left == normalized_right
+
+
+def expand_path_variables(path_value: str) -> str:
+    windows_expanded = re.sub(
+        r"%([^%]+)%", lambda match: os.environ.get(match.group(1), match.group(0)), path_value
+    )
+    return os.path.expandvars(windows_expanded)
 
 
 def prepend_path(path_value: str, entry: Path) -> str:
