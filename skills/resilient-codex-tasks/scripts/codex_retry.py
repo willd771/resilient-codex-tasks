@@ -26,7 +26,6 @@ MESSAGES = {
         ),
         "configuration_error": "Configuration error: {error}",
         "completed": "Codex task completed. State: {state_file}",
-        "quota_exhausted": "Codex quota is exhausted. State preserved at: {state_file}",
         "non_retryable": "Codex did not return a retryable failure. State preserved at: {state_file}",
         "retry_exhausted": "Retry budget exhausted. State preserved at: {state_file}",
         "retrying": "Transient failure. Retrying in {delay:g} seconds ({retry_count}/{retry_limit}).",
@@ -38,7 +37,6 @@ MESSAGES = {
         ),
         "configuration_error": "配置错误：{error}",
         "completed": "Codex 任务已完成。状态文件：{state_file}",
-        "quota_exhausted": "Codex 余额或配额已耗尽。状态已保留在：{state_file}",
         "non_retryable": "Codex 返回了不可重试的错误。状态已保留在：{state_file}",
         "retry_exhausted": "重试次数已耗尽。状态已保留在：{state_file}",
         "retrying": "检测到临时错误，将在 {delay:g} 秒后重试（{retry_count}/{retry_limit}）。",
@@ -48,7 +46,6 @@ MESSAGES = {
 
 class FailureKind(Enum):
     TRANSIENT = "transient"
-    QUOTA_EXHAUSTED = "quota_exhausted"
     NON_RETRYABLE = "non_retryable"
 
 
@@ -59,34 +56,31 @@ class Failure:
 
 
 def classify_failure(output: str) -> Failure:
-    """Classify only documented provider failures as retryable."""
+    """Classify configured Codex HTTP and transport failures as retryable."""
     normalized = output.lower()
-    has_403 = bool(re.search(r"\b403\b", normalized))
-    quota_markers = (
-        "insufficient_quota",
-        "insufficient quota",
-        "quota exhausted",
-        "quota exceeded",
-        "balance exhausted",
-        "balance insufficient",
-        "billing_hard_limit_reached",
-        "余额不足",
-        "额度不足",
-        "配额不足",
-    )
-    if has_403 and any(marker in normalized for marker in quota_markers):
-        return Failure(FailureKind.QUOTA_EXHAUSTED, "Codex balance or quota is exhausted.")
-
     transient_markers = (
-        "429",
-        "502",
-        "503",
         "too many requests",
         "rate limit",
         "bad gateway",
         "service unavailable",
+        "econnreset",
+        "econnaborted",
+        "etimedout",
+        "getaddrinfo",
+        "enotfound",
+        "socket hang up",
+        "connection reset",
+        "connection timed out",
+        "connection timeout",
+        "dns",
+        "could not resolve host",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "network is unreachable",
     )
-    if any(marker in normalized for marker in transient_markers):
+    if re.search(r"\b(?:400|401|403|429|502|503)\b", normalized) or any(
+        marker in normalized for marker in transient_markers
+    ):
         return Failure(FailureKind.TRANSIENT, "Transient Codex provider failure.")
     return Failure(FailureKind.NON_RETRYABLE, "Codex returned a non-retryable failure.")
 
@@ -255,11 +249,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "message": failure.detail,
             "exit_code": result.returncode,
         }
-        if failure.kind is FailureKind.QUOTA_EXHAUSTED:
-            state["status"] = "quota_exhausted"
-            write_state(state_file, state)
-            print(messages["quota_exhausted"].format(state_file=state_file), file=sys.stderr)
-            return 2
         if failure.kind is FailureKind.NON_RETRYABLE:
             state["status"] = "failed"
             write_state(state_file, state)

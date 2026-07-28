@@ -1,6 +1,6 @@
 ---
 name: resilient-codex-tasks
-description: Use when long or stateful Codex CLI tasks may be interrupted by transient HTTP 429, 502, or 503 provider errors, or when a 403 balance or quota response must stop retries.
+description: Use when long or stateful Codex CLI tasks may be interrupted by HTTP 400, 401, 403, 429, 502, or 503 responses, or by connection reset, timeout, DNS, and other configured transport errors that need persisted retries and session resume.
 ---
 
 # Resilient Codex Tasks
@@ -21,9 +21,9 @@ Pass `--language zh-CN` for Chinese wrapper messages and a Chinese resume instru
 
 | Failure | Required action |
 | --- | --- |
-| 429, 502, 503 | Save the session ID, wait, then run `codex exec resume` for the same thread. |
-| 403 plus an exhausted-balance or quota marker | Stop immediately and report the saved state file. |
-| Other 403, 400, 401, or unknown failures | Do not retry. Report the response and preserve the state file. |
+| HTTP 400, 401, 403, 429, 502, 503 | Save the session ID, wait, then run `codex exec resume` for the same thread. This includes 403 balance, quota, permission, and authentication responses. |
+| ECONNRESET, ECONNABORTED, timeouts, DNS resolution failures, socket hang ups, and network-unreachable errors | Save the state, wait, then retry and resume the same thread when a session ID is available. |
+| Unmatched or unknown failures | Do not retry. Report the response and preserve the state file. |
 
 Do not rerun completed state-changing work blindly. On a resumed thread, instruct Codex to inspect the repository and continue only unfinished work.
 

@@ -10,8 +10,8 @@ Keep long-running Codex CLI tasks moving when temporary provider failures interr
 
 ## Highlights
 
-- Retry HTTP `429`, `502`, and `503` with a persisted Codex thread ID.
-- Stop immediately only when `403` explicitly indicates exhausted balance or quota.
+- Retry HTTP `400`, `401`, `403`, `429`, `502`, and `503` with a persisted Codex thread ID.
+- Retry connection resets, timeouts, DNS resolution failures, socket hang ups, and other configured transport failures.
 - Resume after the wrapper itself exits by reusing the state file.
 - Use English by default or pass `--language zh-CN` for Chinese wrapper messages and resume instructions.
 
@@ -56,9 +56,9 @@ The state file stores the original prompt, selected language, thread ID, retry c
 
 | Response | Action |
 | --- | --- |
-| HTTP `429`, `502`, `503` | Wait using exponential backoff and resume the saved Codex thread. |
-| HTTP `403` with an exhausted balance or quota marker | Stop and preserve state. |
-| Other `403`, `400`, `401`, or unknown failures | Stop without retrying. |
+| HTTP `400`, `401`, `403`, `429`, `502`, `503` | Wait using exponential backoff and resume the saved Codex thread. This includes quota, balance, permission, and authentication `403` responses. |
+| `ECONNRESET`, `ECONNABORTED`, timeouts, DNS resolution failures, `socket hang up`, and network-unreachable errors | Wait using exponential backoff and retry, resuming the saved Codex thread when available. |
+| Unmatched or unknown failures | Stop without retrying and preserve state. |
 
 The default retry waits are 15, 30, 60, 120, 240, and 300 seconds.
 

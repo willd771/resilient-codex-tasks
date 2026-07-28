@@ -31,18 +31,31 @@ class CodexRetryTests(unittest.TestCase):
     def test_classifies_transient_statuses_as_retryable(self):
         module = load_module()
 
-        for status in (429, 502, 503):
+        for status in (400, 401, 403, 429, 502, 503):
             result = module.classify_failure(f"HTTP {status} temporary failure")
             self.assertEqual(result.kind, module.FailureKind.TRANSIENT)
 
-    def test_only_quota_related_403_is_terminal_quota(self):
+    def test_classifies_all_403_responses_as_retryable(self):
         module = load_module()
 
         quota = module.classify_failure("HTTP 403: insufficient_quota; balance exhausted")
         forbidden = module.classify_failure("HTTP 403: forbidden by workspace policy")
 
-        self.assertEqual(quota.kind, module.FailureKind.QUOTA_EXHAUSTED)
-        self.assertEqual(forbidden.kind, module.FailureKind.NON_RETRYABLE)
+        self.assertEqual(quota.kind, module.FailureKind.TRANSIENT)
+        self.assertEqual(forbidden.kind, module.FailureKind.TRANSIENT)
+
+    def test_classifies_connection_timeout_and_dns_errors_as_retryable(self):
+        module = load_module()
+
+        for error in (
+            "ECONNRESET",
+            "ETIMEDOUT",
+            "getaddrinfo ENOTFOUND",
+            "Temporary failure in name resolution",
+            "socket hang up",
+        ):
+            result = module.classify_failure(error)
+            self.assertEqual(result.kind, module.FailureKind.TRANSIENT)
 
     def test_extracts_thread_id_from_jsonl_output(self):
         module = load_module()
@@ -92,15 +105,16 @@ class CodexRetryTests(unittest.TestCase):
             self.assertEqual(state["status"], "completed")
             self.assertEqual(state["thread_id"], "thread-123")
 
-    def test_stops_without_retry_when_403_reports_insufficient_quota(self):
+    def test_retries_when_403_reports_insufficient_quota(self):
         module = load_module()
         quota_failure = subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="HTTP 403 insufficient_quota"
         )
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="completed\n", stderr="")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             state_file = Path(temp_dir) / "retry-state.json"
-            with patch.object(module.subprocess, "run", return_value=quota_failure) as run, patch.object(
+            with patch.object(module.subprocess, "run", side_effect=[quota_failure, completed]) as run, patch.object(
                 module.time, "sleep"
             ):
                 exit_code = module.main(
@@ -112,14 +126,14 @@ class CodexRetryTests(unittest.TestCase):
                         "--state-file",
                         str(state_file),
                         "--delays",
-                        "0,0,0",
+                        "0",
                     ]
                 )
 
-            self.assertEqual(exit_code, 2)
-            self.assertEqual(run.call_count, 1)
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(run.call_count, 2)
             state = json.loads(state_file.read_text(encoding="utf-8"))
-            self.assertEqual(state["status"], "quota_exhausted")
+            self.assertEqual(state["status"], "completed")
 
     def test_resumes_a_persisted_thread_after_the_wrapper_restarts(self):
         module = load_module()
