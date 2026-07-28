@@ -16,6 +16,10 @@ PROXY_MARKER = "resilient-codex-tasks global proxy"
 CONFIG_DIRECTORY_NAME = "resilient-codex-tasks"
 
 
+def is_windows() -> bool:
+    return os.name == "nt"
+
+
 def owned_proxy_content(python_executable: str, proxy_script: Path) -> Dict[str, str]:
     escaped_python = python_executable.replace("'", "''")
     escaped_proxy_script = str(proxy_script).replace("'", "''")
@@ -84,7 +88,7 @@ def write_user_path(path_value: str) -> None:
 
 
 def broadcast_environment_change() -> None:
-    if os.name != "nt":
+    if not is_windows():
         return
     result = ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 5000, None)
     if not result:
@@ -214,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
-    if os.name != "nt":
+    if not is_windows():
         print("Global proxy installation is currently supported on Windows only.", file=sys.stderr)
         return 64
     try:
