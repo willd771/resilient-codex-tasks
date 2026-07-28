@@ -50,6 +50,7 @@ class CodexRetryTests(unittest.TestCase):
         for error in (
             "ECONNRESET",
             "ETIMEDOUT",
+            "TimeoutError: request timed out",
             "getaddrinfo ENOTFOUND",
             "Temporary failure in name resolution",
             "socket hang up",

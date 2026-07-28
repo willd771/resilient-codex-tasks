@@ -72,6 +72,8 @@ def classify_failure(output: str) -> Failure:
         "connection reset",
         "connection timed out",
         "connection timeout",
+        "timed out",
+        "timeout",
         "dns",
         "could not resolve host",
         "temporary failure in name resolution",
