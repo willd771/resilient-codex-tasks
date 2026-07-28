@@ -4,6 +4,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -132,6 +134,7 @@ class CodexRetryTests(unittest.TestCase):
                         "prompt": "finish the task",
                         "thread_id": "thread-456",
                         "attempt": 2,
+                        "language": "zh-CN",
                     }
                 ),
                 encoding="utf-8",
@@ -151,6 +154,7 @@ class CodexRetryTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             resumed_command = run.call_args.args[0]
             self.assertEqual(resumed_command[1:4], ["exec", "resume", "thread-456"])
+            self.assertIn("上一次", resumed_command[-1])
 
     def test_preserves_retry_budget_after_the_wrapper_restarts(self):
         module = load_module()
@@ -191,6 +195,38 @@ class CodexRetryTests(unittest.TestCase):
             sleep.assert_not_called()
             state = json.loads(state_file.read_text(encoding="utf-8"))
             self.assertEqual(state["status"], "retry_exhausted")
+
+    def test_uses_a_chinese_resume_prompt_when_requested(self):
+        module = load_module()
+
+        command = module.build_command(["codex"], "finish the task", "thread-zh", "zh-CN")
+
+        self.assertEqual(command[1:4], ["exec", "resume", "thread-zh"])
+        self.assertIn("上一次", command[-1])
+
+    def test_reports_completion_in_chinese_when_requested(self):
+        module = load_module()
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="completed\n", stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_file = Path(temp_dir) / "retry-state.json"
+            output = StringIO()
+            with patch.object(module.subprocess, "run", return_value=completed), redirect_stdout(output):
+                exit_code = module.main(
+                    [
+                        "--prompt",
+                        "完成任务",
+                        "--cwd",
+                        temp_dir,
+                        "--state-file",
+                        str(state_file),
+                        "--language",
+                        "zh-CN",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Codex 任务已完成", output.getvalue())
 
 
 if __name__ == "__main__":

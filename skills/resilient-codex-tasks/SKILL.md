@@ -15,6 +15,8 @@ python <skill-dir>/scripts/codex_retry.py --cwd <workspace> --prompt "<task>"
 
 Use the default six retries with waits of 15, 30, 60, 120, 240, and 300 seconds. Pass `--delays` only when the caller needs a different retry budget.
 
+Pass `--language zh-CN` for Chinese wrapper messages and a Chinese resume instruction. The selected language is stored in the state file and reused by `--resume`.
+
 ## Error Handling
 
 | Failure | Required action |

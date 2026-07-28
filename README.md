@@ -1,30 +1,29 @@
 # Resilient Codex Tasks
 
-`resilient-codex-tasks` is a Codex skill and a small Python wrapper for long-running Codex CLI work. It retries transient provider failures, preserves the Codex thread ID, and resumes the same thread after recovery.
+[![Validate](https://github.com/willd771/resilient-codex-tasks/actions/workflows/validate.yml/badge.svg)](https://github.com/willd771/resilient-codex-tasks/actions/workflows/validate.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-3776AB)](https://www.python.org/)
 
-## Behavior
+Keep long-running Codex CLI tasks moving when temporary provider failures interrupt them. This repository provides a Codex skill and a dependency-free Python wrapper that preserves task state and resumes the same Codex thread.
 
-| Response | Behavior |
-| --- | --- |
-| HTTP 429, 502, or 503 | Retry with the saved Codex thread. |
-| HTTP 403 with an exhausted balance or quota marker | Stop immediately and preserve state. |
-| Other 403, 400, 401, or unknown failures | Stop without retrying. |
+[English](#quick-start) | [简体中文](README.zh-CN.md)
 
-The default retry waits are 15, 30, 60, 120, 240, and 300 seconds.
+## Highlights
 
-## Install
+- Retry HTTP `429`, `502`, and `503` with a persisted Codex thread ID.
+- Stop immediately only when `403` explicitly indicates exhausted balance or quota.
+- Resume after the wrapper itself exits by reusing the state file.
+- Use English by default or pass `--language zh-CN` for Chinese wrapper messages and resume instructions.
 
-Copy `skills/resilient-codex-tasks` into your Codex skills directory:
+## Quick Start
+
+Copy the skill into your Codex skills directory:
 
 ```powershell
 Copy-Item -Recurse .\skills\resilient-codex-tasks "$env:USERPROFILE\.codex\skills\"
 ```
 
-Restart Codex or open a new task so it discovers the new skill.
-
-## Run A Resilient CLI Task
-
-Codex CLI must be installed and authenticated.
+Then start a resilient Codex CLI task:
 
 ```powershell
 python .\skills\resilient-codex-tasks\scripts\codex_retry.py `
@@ -32,7 +31,18 @@ python .\skills\resilient-codex-tasks\scripts\codex_retry.py `
   --prompt "Implement the requested feature and run the tests."
 ```
 
-The wrapper writes `.codex-retry-state.json` in the workspace. To continue after the wrapper itself exits:
+Use Chinese output and resume guidance when needed:
+
+```powershell
+python .\skills\resilient-codex-tasks\scripts\codex_retry.py `
+  --cwd "D:\work\my-project" `
+  --prompt "完成当前任务并运行测试。" `
+  --language zh-CN
+```
+
+## Recovery
+
+The wrapper writes `.codex-retry-state.json` in the workspace. To continue after the wrapper process exits:
 
 ```powershell
 python .\skills\resilient-codex-tasks\scripts\codex_retry.py `
@@ -40,11 +50,21 @@ python .\skills\resilient-codex-tasks\scripts\codex_retry.py `
   --resume "D:\work\my-project\.codex-retry-state.json"
 ```
 
-Treat the state file as task data because it contains the original prompt and recent error metadata.
+The state file stores the original prompt, selected language, thread ID, retry count, and last error. Treat it as task data.
+
+## Response Policy
+
+| Response | Action |
+| --- | --- |
+| HTTP `429`, `502`, `503` | Wait using exponential backoff and resume the saved Codex thread. |
+| HTTP `403` with an exhausted balance or quota marker | Stop and preserve state. |
+| Other `403`, `400`, `401`, or unknown failures | Stop without retrying. |
+
+The default retry waits are 15, 30, 60, 120, 240, and 300 seconds.
 
 ## Scope
 
-The wrapper recovers Codex CLI calls that it starts. It cannot revive an already terminated Codex Desktop conversation because no external process can resume a model request after the desktop app has lost its execution context.
+This wrapper recovers Codex CLI calls that it starts. It cannot revive a terminated Codex Desktop conversation because an external process cannot resume a model request after the desktop app has lost its execution context.
 
 ## Development
 
